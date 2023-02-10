@@ -161,6 +161,19 @@ CSIDevice_AMBaseboard::CSIDevice_AMBaseboard(SIDevices device, int device_number
   {
     m_tri_game = 1;
   }
+
+#ifdef YAC_HACK
+  pipe_h = CreateFileA("\\\\.\\pipe\\YACardEmu", GENERIC_READ | GENERIC_WRITE,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
+  DWORD error = ::GetLastError();
+  if (error != 0)
+  {
+    DEBUG_LOG_FMT(AMBASEBOARDDEBUG, "FAILED TO OPEN PIPE {}", error);
+  }
+  outbound.reserve(512);
+  inbound.reserve(512);
+#endif
 }
 
 constexpr u32 SI_XFER_LENGTH_MASK = 0x7f;
@@ -219,40 +232,41 @@ int CSIDevice_AMBaseboard::RunBuffer(u8* _pBuffer, int request_length)
 #define ptr(x) _pBuffer[(p + x)]
 				while (p < real_len+2)
 				{
-					switch (ptr(0))
-					{
-					case 0x10:
-					{
-						DEBUG_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 10, {:02x} (READ STATUS&SWITCHES)", ptr(1));
-						GCPadStatus PadStatus;
-            PadStatus = Pad::GetStatus( ISIDevice::m_device_number );
-						res[resp++] = 0x10;
-						res[resp++] = 0x2;
+          switch (ptr(0))
+          {
+          case 0x10:
+          {
+            DEBUG_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 10, {:02x} (READ STATUS&SWITCHES)",
+                          ptr(1));
+            GCPadStatus PadStatus;
+            PadStatus = Pad::GetStatus(ISIDevice::m_device_number);
+            res[resp++] = 0x10;
+            res[resp++] = 0x2;
 
-						/*baseboard test/service switches ???, disabled for a while
-						if (PadStatus.button & PAD_BUTTON_Y)	// Test
-							d10_0 &= ~0x80;
-						if (PadStatus.button & PAD_BUTTON_X)	// Service
-							d10_0 &= ~0x40;
-						*/
+            /*baseboard test/service switches ???, disabled for a while
+            if (PadStatus.button & PAD_BUTTON_Y)	// Test
+              d10_0 &= ~0x80;
+            if (PadStatus.button & PAD_BUTTON_X)	// Service
+              d10_0 &= ~0x40;
+            */
 
             // Horizontal Scanning Frequency switch
             // Required for F-Zero AX booting via Sega Boot
             d10_0 &= ~0x20;
 
-						res[resp++] = d10_0;
-						res[resp++] = d10_1;
-						break;
-					}
-					case 0x11:
-					{
-						NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 11, {:02x} (READ SERIAL NR)", ptr(1));
-						char string[] = "AADE-01A14964511";
-						res[resp++] = 0x11;
-						res[resp++] = 0x10;
-						memcpy(res + resp, string, 0x10);
-						resp += 0x10;
-						break;
+            res[resp++] = d10_0;
+            res[resp++] = d10_1;
+            break;
+          }
+          case 0x11:
+          {
+            NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 11, {:02x} (READ SERIAL NR)", ptr(1));
+            char string[] = "AADE-01A14964511";
+            res[resp++] = 0x11;
+            res[resp++] = 0x10;
+            memcpy(res + resp, string, 0x10);
+            resp += 0x10;
+            break;
           }
           case 0x12:
             NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 12, {:02x} {:02x}", ptr(1), ptr(2));
@@ -264,95 +278,106 @@ int CSIDevice_AMBaseboard::RunBuffer(u8* _pBuffer, int request_length)
             res[resp++] = 0x14;
             res[resp++] = 0x00;
             break;
-					case 0x15: 
-						NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 15, {:02x} (READ FIRM VERSION)", ptr(1));
-						res[resp++] = 0x15;
+          case 0x15:
+            NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 15, {:02x} (READ FIRM VERSION)",
+                           ptr(1));
+            res[resp++] = 0x15;
             res[resp++] = 0x02;
             // FIRM VERSION
             // 00.26
             res[resp++] = 0x00;
             res[resp++] = 0x26;
-						break;
-					case 0x16:
-						NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 16, {:02x} (READ FPGA VERSION)", ptr(1));
-						res[resp++] = 0x16;
+            break;
+          case 0x16:
+            NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 16, {:02x} (READ FPGA VERSION)",
+                           ptr(1));
+            res[resp++] = 0x16;
             res[resp++] = 0x02;
             // FPGA VERSION
             // 07.06
             res[resp++] = 0x07;
-            res[resp++] = 0x06; 
-						break;
-					case 0x1f:
-					{
+            res[resp++] = 0x06;
+            break;
+          case 0x1f:
+          {
             // Only used by SegaBoot for region checks (dev mode skips this check)
-						NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 1f, {:02x} {:02x} {:02x} {:02x} {:02x} (REGION)", ptr(1), ptr(2), ptr(3), ptr(4), ptr(5));
-						unsigned char string[] =  
-							"\x00\x00\x30\x00"
-							//"\x01\xfe\x00\x00" // JAPAN
-							//"\x02\xfd\x00\x00" // USA
-							"\x03\xfc\x00\x00" // export
-							"\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff";
-						res[resp++] = 0x1f;
-						res[resp++] = 0x14;
+            NOTICE_LOG_FMT(AMBASEBOARDDEBUG,
+                           "GC-AM: Command 1f, {:02x} {:02x} {:02x} {:02x} {:02x} (REGION)", ptr(1),
+                           ptr(2), ptr(3), ptr(4), ptr(5));
+            unsigned char string[] = "\x00\x00\x30\x00"
+                                     //"\x01\xfe\x00\x00" // JAPAN
+                                     //"\x02\xfd\x00\x00" // USA
+                                     "\x03\xfc\x00\x00"  // export
+                                     "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff";
+            res[resp++] = 0x1f;
+            res[resp++] = 0x14;
 
-						for( int i=0; i<0x14; ++i )
-							res[resp++] = string[i];
+            for (int i = 0; i < 0x14; ++i)
+              res[resp++] = string[i];
             p += 5;
-					} break;
-			    /* No reply */
-			    case 0x21:
+          }
+          break;
+          /* No reply */
+          case 0x21:
           {
-						NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 0x21, {:02x}", ptr(1) );
+            NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 0x21, {:02x}", ptr(1));
             resp += ptr(1) + 2;
-          } break;
-			    /* No reply */
-			    case 0x22:
+          }
+          break;
+          /* No reply */
+          case 0x22:
           {
-						NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 0x22, {:02x}", ptr(1) );
+            NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 0x22, {:02x}", ptr(1));
             resp += ptr(1) + 2;
-          } break;
-					case 0x23:
-						if( ptr(1) )
-						{
-							NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 0x23, {:02x} {:02x} {:02x} {:02x} {:02x}", ptr(1), ptr(2), ptr(3), ptr(4), ptr(5) );
-							res[resp++] = 0x23;
-							res[resp++] = 0x00;
-						}
-						else
-						{
-							res[resp++] = 0x23;
-							res[resp++] = 0x00;
-						}
-						break;
-					case 0x24:
-						if( ptr(1) )
-						{
-							NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 0x24, {:02x} {:02x} {:02x} {:02x} {:02x}", ptr(1), ptr(2), ptr(3), ptr(4), ptr(5) );
-							res[resp++] = 0x24;
-							res[resp++] = 0x00;
-						}
-						else
-						{
-							res[resp++] = 0x24;
-							res[resp++] = 0x00;
-						}
-						break;
-					case 0x31:
-					//	NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 31 (MOTOR) {:02x} {:02x} {:02x} {:02x} {:02x}", ptr(1), ptr(2), ptr(3), ptr(4), ptr(5));
+          }
+          break;
+          case 0x23:
+            if (ptr(1))
+            {
+              NOTICE_LOG_FMT(AMBASEBOARDDEBUG,
+                             "GC-AM: Command 0x23, {:02x} {:02x} {:02x} {:02x} {:02x}", ptr(1),
+                             ptr(2), ptr(3), ptr(4), ptr(5));
+              res[resp++] = 0x23;
+              res[resp++] = 0x00;
+            }
+            else
+            {
+              res[resp++] = 0x23;
+              res[resp++] = 0x00;
+            }
+            break;
+          case 0x24:
+            if (ptr(1))
+            {
+              NOTICE_LOG_FMT(AMBASEBOARDDEBUG,
+                             "GC-AM: Command 0x24, {:02x} {:02x} {:02x} {:02x} {:02x}", ptr(1),
+                             ptr(2), ptr(3), ptr(4), ptr(5));
+              res[resp++] = 0x24;
+              res[resp++] = 0x00;
+            }
+            else
+            {
+              res[resp++] = 0x24;
+              res[resp++] = 0x00;
+            }
+            break;
+          case 0x31:
+            //	NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 31 (MOTOR) {:02x} {:02x} {:02x}
+            //{:02x} {:02x}", ptr(1), ptr(2), ptr(3), ptr(4), ptr(5));
 
-						// Command Length
-						if( ptr(1) )
-						{
-							// All commands are OR'd with 0x80
-							// Last byte (ptr(5)) is checksum which we don't care about
-							u32 cmd =(ptr(2)^0x80) << 16;
-									cmd|= ptr(3) << 8;
-									cmd|= ptr(4);
+            // Command Length
+            if (ptr(1))
+            {
+              // All commands are OR'd with 0x80
+              // Last byte (ptr(5)) is checksum which we don't care about
+              u32 cmd = (ptr(2) ^ 0x80) << 16;
+              cmd |= ptr(3) << 8;
+              cmd |= ptr(4);
 
-							NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 31 (SERIAL) Command:{:06x}", cmd );
+              NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 31 (SERIAL) Command:{:06x}", cmd);
 
-              // Gekitou Pro Yakyuu 
-              if( cmd == 0x801000 )
+              // Gekitou Pro Yakyuu
+              if (cmd == 0x801000)
               {
                 res[resp++] = 0x31;
                 res[resp++] = 0x03;
@@ -362,77 +387,137 @@ int CSIDevice_AMBaseboard::RunBuffer(u8* _pBuffer, int request_length)
                 break;
               }
 
-							// Serial - Wheel
-					    if( cmd == 0x7FFFFF )
-					    {
-						    res[resp++] = 0x31;
-						    res[resp++] = 0x03;
-				
-						    res[resp++] = 'C';
-						    res[resp++] = '0';
+              // Serial - Wheel
+              if (cmd == 0x7FFFFF)
+              {
+                res[resp++] = 0x31;
+                res[resp++] = 0x03;
 
-								if( m_wheelinit == 0 )
-						    {
-							    res[resp++] = '1';
-									m_wheelinit = 1;
-						    }
+                res[resp++] = 'C';
+                res[resp++] = '0';
+
+                if (m_wheelinit == 0)
+                {
+                  res[resp++] = '1';
+                  m_wheelinit = 1;
+                }
                 else
                 {
-							    res[resp++] = '6';
-						    }
-					    }
-							
-							// Serial - Motor
-							m_motorreply[0] = 0x31;
-							m_motorreply[1] = 0x04;
+                  res[resp++] = '6';
+                }
+              }
 
-							// Status
-							m_motorreply[2] = 0;	
-							m_motorreply[3] = 0;
-							// error
-							m_motorreply[4] = 0;	
+              // Serial - Motor
+              m_motorreply[0] = 0x31;
+              m_motorreply[1] = 0x04;
 
-							switch(cmd>>16)
-							{
-								case 0x00:
-									if( cmd == 0 )
-										m_motorforce = 0;
-									break;
-								case 0x04:
-									m_motorforce	= 1;
-									m_motorforce_x	= (s16)(cmd<<4);
-									m_motorforce_y  = m_motorforce_x;
-									break;
-								case 0x70:
-									m_motorforce = 0;
-									break;
-								case 0x7A:
-									m_motorforce	= 1;
-									m_motorforce_x	= (s16)(cmd & 0xFFFF);
-									m_motorforce_y  = m_motorforce_x;
-									break;
-								default:
-									break;
-							}
+              // Status
+              m_motorreply[2] = 0;
+              m_motorreply[3] = 0;
+              // error
+              m_motorreply[4] = 0;
 
-							//Checksum
-							m_motorreply[5] = m_motorreply[2] ^ m_motorreply[3] ^ m_motorreply[4];
-							resp += 6;
+              switch (cmd >> 16)
+              {
+              case 0x00:
+                if (cmd == 0)
+                  m_motorforce = 0;
+                break;
+              case 0x04:
+                m_motorforce = 1;
+                m_motorforce_x = (s16)(cmd << 4);
+                m_motorforce_y = m_motorforce_x;
+                break;
+              case 0x70:
+                m_motorforce = 0;
+                break;
+              case 0x7A:
+                m_motorforce = 1;
+                m_motorforce_x = (s16)(cmd & 0xFFFF);
+                m_motorforce_y = m_motorforce_x;
+                break;
+              default:
+                break;
+              }
 
-						} else {
-							if( m_motorreply[0] )
-							{
-								memcpy( res+resp, m_motorreply, sizeof(m_motorreply) );
-								resp += sizeof(m_motorreply);
-							} else {
-								res[resp++] = 0x31;
-								res[resp++] = 0x00;
-							}
-						
-						}
-						break;
-					case 0x32:
-					//	NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 32 (CARD-Interface)");
+              // Checksum
+              m_motorreply[5] = m_motorreply[2] ^ m_motorreply[3] ^ m_motorreply[4];
+              resp += 6;
+            }
+            else
+            {
+              if (m_motorreply[0])
+              {
+                memcpy(res + resp, m_motorreply, sizeof(m_motorreply));
+                resp += sizeof(m_motorreply);
+              }
+              else
+              {
+                res[resp++] = 0x31;
+                res[resp++] = 0x00;
+              }
+            }
+            break;
+          case 0x32:
+            //	NOTICE_LOG_FMT(AMBASEBOARDDEBUG, "GC-AM: Command 32 (CARD-Interface)");
+#ifdef YAC_HACK
+            // ptr(0)
+            // 0 = 0x32
+            // 1 = CMD_LENG
+            // ...
+            {
+              res[resp++] = 0x32;
+              u32 CMDLenO = resp;
+              res[resp++] = 0x00;  // Get's replaced with CMDLenO
+              if (ptr(1) == 0)
+              {
+                DWORD dwBytes = 0;
+                if (PeekNamedPipe(pipe_h, 0, 0, 0, &dwBytes, 0) == 0)
+                {
+                  DWORD error = ::GetLastError();
+                  if (error == ERROR_BROKEN_PIPE)
+                  {
+                    DisconnectNamedPipe(pipe_h);
+                    ConnectNamedPipe(pipe_h, NULL);
+                  }
+                }
+
+                if (dwBytes)
+                {
+                  DWORD dwRet = 0;
+                  inbound.resize(static_cast<size_t>(dwBytes));
+                  BOOL bRet = ReadFile(pipe_h, &inbound[0], dwBytes, &dwRet, NULL);
+
+                  // FIXME: Make sure we aren't popping the res buffer!
+                  for (const auto& i : inbound)
+                  {
+                    res[resp++] = i;
+                  }
+
+                  inbound.clear();
+
+                  res[CMDLenO] = dwBytes;
+                }
+              }
+              else
+              {
+                for (u32 i = 0; i < ptr(1); ++i)
+                {
+                  outbound.emplace_back(ptr(2 + i));
+                }
+
+                if (!outbound.empty())
+                {
+                  DWORD dwRet = 0;
+                  WriteFile(pipe_h, &outbound[0], static_cast<DWORD>(outbound.size()), &dwRet,
+                            NULL);
+                  outbound.clear();
+                }
+
+                uint8_t test2 = 0;
+              }
+            }
+#else
 						if( ptr(1) )
 						{
 							if( ptr(1) == 1 && ptr(2) == 0x05 )
@@ -798,6 +883,7 @@ int CSIDevice_AMBaseboard::RunBuffer(u8* _pBuffer, int request_length)
 							res[resp++] = 0x32;
 							res[resp++] = 0x00;	// len
 						}
+#endif
 						break;
 					case 0x40:
 					case 0x41:

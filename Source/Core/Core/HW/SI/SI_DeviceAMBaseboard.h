@@ -12,6 +12,12 @@
 #include "Common/Flag.h"
 #include "Core/HW/SI/SI_Device.h"
 
+#define YAC_HACK
+#ifdef YAC_HACK
+#include <windows.h>
+#include <vector>
+#endif
+
 namespace SerialInterface
 {
 // triforce (GC-AM) baseboard
@@ -83,6 +89,12 @@ private:
   s16 m_motorforce_y;
 
   u32 m_tri_game = 0;
+
+#ifdef YAC_HACK
+  HANDLE pipe_h = INVALID_HANDLE_VALUE;
+  std::vector<uint8_t> outbound;
+  std::vector<uint8_t> inbound;
+#endif
 
 public:
   // constructor
