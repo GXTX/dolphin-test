@@ -466,10 +466,12 @@ int CSIDevice_AMBaseboard::RunBuffer(u8* _pBuffer, int request_length)
             // 1 = CMD_LENG
             // ...
             {
+              #define MaxLength 0x2F
               res[resp++] = 0x32;
               u32 CMDLenO = resp;
-              res[resp++] = 0x00;  // Get's replaced with CMDLenO
-              if (ptr(1) == 0)
+              res[resp++] = 0x00;  // Gets replaced with CMDLenO
+
+              if (ptr(1) == 0 || ptr(2) == 0x05 && !inbound.empty())
               {
                 DWORD dwBytes = 0;
                 if (PeekNamedPipe(pipe_h, 0, 0, 0, &dwBytes, 0) == 0)
@@ -482,21 +484,23 @@ int CSIDevice_AMBaseboard::RunBuffer(u8* _pBuffer, int request_length)
                   }
                 }
 
-                if (dwBytes)
+                if (inbound.empty() && dwBytes)
                 {
                   DWORD dwRet = 0;
                   inbound.resize(static_cast<size_t>(dwBytes));
                   BOOL bRet = ReadFile(pipe_h, &inbound[0], dwBytes, &dwRet, NULL);
+                }
 
-                  // FIXME: Make sure we aren't popping the res buffer!
-                  for (const auto& i : inbound)
+                if (!inbound.empty())
+                {
+                  auto size = inbound.size() > MaxLength ? MaxLength : inbound.size();
+
+                  for (auto i = 0; i < size; i++)
                   {
-                    res[resp++] = i;
+                    res[resp++] = inbound.at(i);
                   }
-
-                  inbound.clear();
-
-                  res[CMDLenO] = dwBytes;
+                  inbound.erase(inbound.begin(), inbound.begin() + size);
+                  res[CMDLenO] = static_cast<unsigned char>(size);
                 }
               }
               else
@@ -513,8 +517,6 @@ int CSIDevice_AMBaseboard::RunBuffer(u8* _pBuffer, int request_length)
                             NULL);
                   outbound.clear();
                 }
-
-                uint8_t test2 = 0;
               }
             }
 #else
